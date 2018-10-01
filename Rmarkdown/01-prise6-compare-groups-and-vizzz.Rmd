@@ -1,0 +1,389 @@
+---
+title: "Compare Groups + Vizzz"
+output:
+  github_document:
+    toc: true
+author: prise6, `r format(Sys.Date(), "%d/%m/%Y")`
+always_allow_html: yes
+editor_options: 
+  chunk_output_type: console
+---
+
+
+### Motivations
+
+I found a really great package recently called __[compareGroups](http://www.comparegroups.eu/)__ that build bivariate tables. I think it's a great work and i want to go further in the rendering.
+
+According to my short researchs, this package have been existing since [2014](https://www.jstatsoft.org/article/view/v057i12), but is recently out on [github](https://github.com/isubirana/compareGroups) and the [CRAN](https://cran.r-project.org/web/packages/compareGroups/index.html).
+
+V4 is currently only available on github:
+
+```{r, eval=FALSE}
+library(devtools)
+devtools::install_github(repo = "isubirana/compareGroups")
+```
+
+_(this package has many dependences)_
+
+
+This _tutorial_ is not a copy of the [wonderfull vignette](https://cran.r-project.org/web/packages/compareGroups/vignettes/compareGroups_vignette.html) of the package because it's really well explained. Again, great job, really useful !
+
+
+### Goal
+
+Let's say you have a clustering to perform, and you'd like to explain your clusters with figures and graphs. This will be a dump example with the ... `iris` dataset. This post does not focus on clustering, it's only a pretext to have this final rendering:
+
+```{r, echo=FALSE}
+readRDS(file.path(getwd(), "Datas", "01-comparegroups-plots.rds"))
+```
+
+
+Let's see the step we're going through
+
+1. Packages
+2. Data and global variables
+3. Perform quick clustering with PCA and K-means
+4. Compare clusters
+5. __Compare clusters with graphs and figures__
+
+
+### 1. Packages
+
+We need to load and attach few packages.
+
+* `compareGroups`: THE package we want to _hack_
+* `xml2`: DOM manipulation
+* `htmltools`: html tags manipulation
+* `knitr`: dynamic report generation
+* `ggplot2`: draw some graphs
+
+
+```{r, message=FALSE}
+library(compareGroups)
+library(xml2)
+library(htmltools)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(data.table)
+```
+
+
+### 2. Data and global variables
+
+I set differents variables that we need along the script. Obvisously i set le `NB_CLUSTERS` to 3 because it's not the point of this post to find the best number of clusters.
+
+```{r global_variables}
+# global variables
+VARIABLES             = c("Sepal.Length", "Sepal.Width", "Petal.Length", "Petal.Width")
+VARIABLES_AND_CLUSTER = c("cluster", VARIABLES)
+NB_CLUSTERS           = 3
+NSTART                = 100
+SEED_KM               = 234
+```
+
+We fake that `iris` dataset doesn't contain any group and we want to cluster observations. We create `iris.x` datatable on which we'll perform the analysis.
+
+```{r data_prep, collapse=TRUE}
+# load dataset
+data(iris)
+# make it datatable
+setDT(iris)
+# create iris.x
+iris.x = iris[, ..VARIABLES]
+str(iris.x)
+```
+
+
+### 3. Perform quick clustering with PCA and K-means
+
+Before computing K-means i'd like to project `iris.x` to one or two dimension space thanks to PCA. 
+
+```{r pca}
+# PCA scaled
+PCA = prcomp(iris.x, scale. = T, center = T)
+# add PCA components to iris.x datatable
+iris.x = cbind(iris.x, as.data.table(PCA$x))
+```
+
+```{r, collapse=TRUE}
+# see that the two first component explains majority of variability
+cumsum(PCA$sdev)/sum(PCA$sdev)
+```
+
+
+We chose two dimensions to compute K-means with `r NB_CLUSTERS` distinct centers and test `r NSTART` intials configurations.
+
+```{r kmeans}
+# reproducibility
+set.seed(SEED_KM)
+# K-means
+model.km = kmeans(iris.x[, list(PC1, PC2)], centers = NB_CLUSTERS, nstart = NSTART)
+# add cluster columng to iris.x datatable
+iris.x$cluster = model.km$cluster
+# transform into factor with nice labels
+iris.x[, cluster := factor(
+  x      = cluster,
+  levels = seq_len(NB_CLUSTERS),
+  labels = paste("Cluster", seq_len(NB_CLUSTERS))
+)]
+```
+
+
+### 4. Compare clusters
+
+Let's use `compareGroups` to compute mean of the observations foreach variables and clusters.
+
+```{r compare_group_1}
+comparegroups.main = compareGroups(
+  formula          = cluster ~ .,
+  data             = iris.x[, ..VARIABLES_AND_CLUSTER]
+)
+```
+
+```{r, collapse=TRUE}
+comparegroups.main
+```
+
+
+Above, we print the summary of the future table we're creating. Notice that `p.value` are computed, if distribution is normal, anova is performed. Otherwise you'll find great explanations on [this vignette](https://cran.r-project.org/web/packages/compareGroups/vignettes/compareGroups_vignette.html).
+
+Next, we create our table, with a _ALL_ column, meaning all our observations.
+
+```{r compare_group_2}
+comparegroups.main.table = createTable(
+  x        = comparegroups.main,
+  show.all = T
+)
+```
+
+```{r, collapse=TRUE}
+comparegroups.main.table
+```
+
+
+Then, we can render this table into markdown format thanks to `export2md()` function using knitr. We store the result in `comparegroups.html` variable to modify content later.
+
+```{r compare_group_3}
+comparegroups.html = suppressWarnings(
+  export2md(
+    x             = comparegroups.main.table,
+    caption       = "",
+    header.labels = c(
+      "all"       = "All",
+      "p.overall" = "p-value"
+    )
+  )
+)
+```
+
+```{r, collapse=TRUE}
+comparegroups.html
+```
+
+
+### 5. Compare clusters with graphs and figures
+
+First, we need to make small plots. Plots are images that we need to encode into [base64 string](https://en.wikipedia.org/wiki/Base64). The idea is to store the image inside the HTML thanks to [data URI scheme](https://en.wikipedia.org/wiki/Data_URI_scheme)
+
+For example, this HTML code is an `html <img>` tag sourcing (`src` attribut) a __base64 image__ thanks to __URI scheme__:
+
+```{html, eval=FALSE}
+<img src="data:image/png;base64,iVBORw0KGgoAAA
+ANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4
+//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU
+5ErkJggg==" alt="Red dot" />
+```
+
+In your browser this HTML is a red dot:
+
+<img src="data:image/png;base64,iVBORw0KGgoAAA
+ANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4
+//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU
+5ErkJggg==" alt="Red dot" />
+
+
+#### Function to generate plot
+
+`generatePlot()` asks for the selected cluster and the whole dataset containing `PC1` and `PC2`. It returns a `ggplot2` object with two `geom_point` layer. In black, the non selcted clusters. In red, the selected cluster. `PC1` as x-axis and `PC2` as y-axis.
+
+```{r generatePlot}
+generatePlot = function(cluster_s, data) {
+  general_graph_data = data[!cluster %in% cluster_s, list(PC1, PC2)]
+  cluster_graph_data = data[cluster %in% cluster_s, list(PC1, PC2)]
+  
+  g = ggplot() +
+    geom_point(data = general_graph_data, aes(x = PC1, y = PC2), alpha = .3) +
+    geom_point(data = cluster_graph_data, aes(x = PC1, y = PC2), color = "red") +
+    theme_void()
+  
+  return(g)
+}
+```
+
+Example:
+
+```{r}
+(p = generatePlot("Cluster 1", iris.x))
+```
+
+
+#### Function to generate data URI scheme
+
+We need to save our plot as an image, read it thanks to `knitr::image_uri()` function that create data URI scheme.
+
+`plotToURI()` asks for the ggplot object to transform and additionnal arguments for `ggsave()` function.
+
+```{r plotToURI}
+plotToURI = function(plot, file = NULL, ...) {
+  
+  if(is.null(file)) file = paste(tempfile(), "png", sep = ".")
+  
+  ggsave(filename = file, plot = plot, ...)
+  uri = knitr::image_uri(file)
+  
+  return(uri)
+}
+```
+
+```{r}
+pURI = plotToURI(p, width = 3, height = 3, units = "cm", dpi = 100)
+```
+
+See what is like.
+
+```{r, collapse=TRUE}
+str(pURI, nchar.max = 80)
+```
+
+If we use `img` tag with the `htmltools` package around that string we observe this image:
+
+```{r}
+tags$img(src = pURI)
+```
+
+
+#### HTML Tables
+
+Our table is made up of HTML tags. Rows are coded with `<tr>` tag and we want to add a new row where i wrote the comment `<!-- plot row -->`
+
+
+```{html}
+<table>
+<caption></caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;">   </th>
+   <th style="text-align:center;"> All </th>
+   <th style="text-align:center;"> Cluster 1 </th>
+   <th style="text-align:center;"> Cluster 2 </th>
+   <th style="text-align:center;"> Cluster 3 </th>
+   <th style="text-align:center;"> p-value </th>
+  </tr>
+ </thead>
+<tbody>
+  <!-- plot row -->
+  <tr>
+   <td style="text-align:left;">  </td>
+   <td style="text-align:center;"> N=150 </td>
+   <td style="text-align:center;"> N=53 </td>
+   <td style="text-align:center;"> N=47 </td>
+   <td style="text-align:center;"> N=50 </td>
+   <td style="text-align:center;">  </td>
+  </tr>
+  ...
+</tbody>
+</table>
+```
+
+So we need to add to the HTML table a block like :
+
+```{html}
+<tr>
+  <td style="text-align:left;"></td>
+  <td style="text-align:left;"></td>
+  <td style="text-align:center;">
+    <img src="data:image/png;base64,..."/>
+  </td>
+  <td style="text-align:center;">
+    <img src="data:image/png;base64,..."/>
+  </td>
+  <td style="text-align:center;">
+    <img src="data:image/png;base64,..."/>
+  </td>
+  <td style="text-align:left;"></td>
+</tr>
+```
+
+Let's create this html block by looping on clusters.
+
+```{r}
+# create img tags and td tags around
+html_block = lapply(paste("Cluster", 1:3), function(cl) {
+  p = generatePlot(cl, iris.x)
+  uri = plotToURI(p, width = 3, height = 3, units = "cm", dpi = 100)
+  
+  tags$td(style = "text-align:center;", tags$img(src = uri))
+})
+
+# fill the block with td tags in empty cells
+html_block = tagList(
+  tags$td(style = "text-align:left;"),
+  tags$td(style = "text-align:left;"),
+  html_block,
+  tags$td(style = "text-align:left;")
+)
+
+# we wrap the block in a tr tag
+html_block = tags$tr(html_block)
+```
+
+
+#### Parse HTML
+
+Ok, we did the hardest part. Now, we want to combine the table and the html block. This is where we need `xml2` package to parse XML/HTML elements.
+
+We have to create a XML document instance thanks to `read_html()`/`read_xml()` function in order to manipulate HTML elements. 
+
+```{r}
+# xml instance of comparegroups.html
+comparegroups.html.parse = read_html(as.character(comparegroups.html))
+# xml instance of html_block
+plot_row = read_xml(doRenderTags(html_block, indent = F))
+```
+
+Then, we look for the first column after `<tbody>` tag because we want to insert our `plot_row` before this first column.
+
+```{r}
+# find reference to the first column after tbody
+first_tbody_tr = xml_find_first(comparegroups.html.parse, "//tbody//tr")
+# add sibling before first_tbody_tr
+xml_add_sibling(first_tbody_tr, .value = plot_row, .where = "before")
+```
+
+We update our inital table object by replacing the old HTML table with the newest.
+
+```{r}
+comparegroups.html[1] = as.character(comparegroups.html.parse)
+```
+
+
+#### Render HTML
+
+To finish, we use `kableExtra` package to generate fashion tables.
+
+```{r, echo=TRUE}
+comparegroups.html %>%
+  kable_styling(font_size = 12, bootstrap_options = "responsive") %>%
+  column_spec(column = 2, bold = T)
+```
+
+
+### Go further
+
+* [Vignette of compareGroups](https://cran.r-project.org/web/packages/compareGroups/vignettes/compareGroups_vignette.html)
+* [Vignette of kableExtra](https://cran.r-project.org/web/packages/kableExtra/vignettes/awesome_table_in_html.html)
+* [DOM elements](https://www.w3schools.com/jsref/dom_obj_all.asp)
+* [XPath](https://en.wikipedia.org/wiki/XPath)
+
+
