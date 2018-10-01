@@ -1,6 +1,6 @@
 Compare Groups + Vizzz
 ================
-prise6, 01/10/2018
+prise6, 02/10/2018
 
 -   [Motivations](#motivations)
 -   [Goal](#goal)
